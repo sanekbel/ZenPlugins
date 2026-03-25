@@ -51,7 +51,7 @@ describe('convertAccounts', () => {
 })
 
 describe('convertCards', () => {
-  it('should create separate account per card and currency', () => {
+  it('should create one account per bank accountNumber and currency', () => {
     const cards: OtpCard[] = [
       {
         primaryCardId: '1111',
@@ -80,12 +80,73 @@ describe('convertCards', () => {
     const result = convertCards(cards)
 
     expect(result).toHaveLength(2)
-    expect(result[0].account.id).toBe('virtual_1111_RSD')
-    expect(result[1].account.id).toBe('virtual_2222_EUR')
+    expect(result[0].account.id).toBe('virtual_12345678_RSD')
+    expect(result[1].account.id).toBe('virtual_87654321_EUR')
     expect(result[0].account.type).toBe(AccountType.ccard)
     expect(result[1].account.syncIds).toContain('2222********2222')
     expect(result[0].products[0].source).toBe('cardTurnover')
     expect(result[0].products[0].accountType).toBe('DIN')
     expect(result[1].products[0].accountType).toBe('DEV')
+  })
+
+  it('should merge two virtual cards sharing accountNumber into one account per currency', () => {
+    const sharedAccount = '1234'
+    const cards: OtpCard[] = [
+      {
+        primaryCardId: '1111',
+        productCodeCore: '9',
+        cardTitle: 'Visa Virtual debit',
+        maskedPan: '1111********1111',
+        currencyCode: 'RSD',
+        currencyCodeNumeric: '941',
+        balance: 0,
+        accountNumber: sharedAccount,
+        isVirtual: true
+      },
+      {
+        primaryCardId: '2222',
+        productCodeCore: '9',
+        cardTitle: 'Dina Virtual debit',
+        maskedPan: '2222********2222',
+        currencyCode: 'RSD',
+        currencyCodeNumeric: '941',
+        balance: 0,
+        accountNumber: sharedAccount,
+        isVirtual: true
+      },
+      {
+        primaryCardId: '3333',
+        productCodeCore: '9',
+        cardTitle: 'Visa Virtual debit',
+        maskedPan: '3333********3333',
+        currencyCode: 'EUR',
+        currencyCodeNumeric: '978',
+        balance: 100,
+        accountNumber: sharedAccount,
+        isVirtual: true
+      },
+      {
+        primaryCardId: '4444',
+        productCodeCore: '9',
+        cardTitle: 'Dina Virtual debit',
+        maskedPan: '4444********4444',
+        currencyCode: 'EUR',
+        currencyCodeNumeric: '978',
+        balance: 100,
+        accountNumber: sharedAccount,
+        isVirtual: true
+      }
+    ]
+
+    const result = convertCards(cards)
+
+    expect(result).toHaveLength(2)
+    const rsd = result.find(r => r.account.instrument === 'RSD')
+    const eur = result.find(r => r.account.instrument === 'EUR')
+    expect(rsd?.account.id).toBe(`virtual_${sharedAccount}_RSD`)
+    expect(eur?.account.id).toBe(`virtual_${sharedAccount}_EUR`)
+    expect(rsd?.products).toHaveLength(2)
+    expect(eur?.products).toHaveLength(2)
+    expect(rsd?.account.syncIds).toEqual(expect.arrayContaining(['1111', '2222', '1111********1111', '2222********2222']))
   })
 })

@@ -1,6 +1,6 @@
 import { Account, AccountType, ExtendedTransaction, Merchant, NonParsedMerchant } from '../../types/zenmoney'
 import { getOptNumber, getOptString } from '../../types/get'
-import { ConvertResult, OtpAccount, OtpCard, OtpTransaction } from './models'
+import { ConvertResult, OtpAccount, OtpCard, OtpTransaction, Product } from './models'
 
 export function convertAccounts (apiAccounts: OtpAccount[]): ConvertResult[] {
   const accountsByCba: Record<string, ConvertResult | undefined> = {}
@@ -55,29 +55,77 @@ function convertAccount (apiAccount: OtpAccount, accountsByCba: Record<string, C
   return newAccount ? account : null
 }
 
-export function convertCards (apiCards: OtpCard[]): ConvertResult[] {
-  return apiCards.map(card => {
-    const accountId = `virtual_${card.primaryCardId}_${card.currencyCode}`
-    return {
-      products: [{
-        id: accountId,
-        source: 'cardTurnover',
-        primaryCardId: card.primaryCardId,
-        productCodeCore: card.productCodeCore,
-        currencyCodeNumeric: card.currencyCodeNumeric,
-        accountType: card.currencyCodeNumeric === '941' ? 'DIN' : 'DEV'
-      }],
-      account: {
-        id: accountId,
-        type: AccountType.ccard,
-        title: `${card.cardTitle} ${card.currencyCode}`,
-        instrument: card.currencyCode,
-        balance: card.balance,
-        creditLimit: 0,
-        syncIds: [accountId, card.primaryCardId, card.maskedPan]
-      }
+function virtualCardGroupKey (card: OtpCard): string {
+  return `${card.accountNumber}\t${card.currencyCode}`
+}
+
+function dedupeCardsByPrimaryId (cards: OtpCard[]): OtpCard[] {
+  const byId = new Map<string, OtpCard>()
+  for (const card of cards) {
+    if (!byId.has(card.primaryCardId)) {
+      byId.set(card.primaryCardId, card)
     }
-  })
+  }
+  return Array.from(byId.values())
+}
+
+function virtualCardGroupTitle (cards: OtpCard[], currencyCode: string): string {
+  const titles = [...new Set(cards.map(c => c.cardTitle))]
+  if (titles.length === 1) {
+    return `${titles[0]} ${currencyCode}`
+  }
+  return `${titles.join(' / ')} ${currencyCode}`
+}
+
+export function convertCards (apiCards: OtpCard[]): ConvertResult[] {
+  const groups = new Map<string, OtpCard[]>()
+  for (const card of apiCards) {
+    const key = virtualCardGroupKey(card)
+    const bucket = groups.get(key)
+    if (bucket == null) {
+      groups.set(key, [card])
+    } else {
+      bucket.push(card)
+    }
+  }
+
+  return Array.from(groups.values()).map(cardsInGroup => convertVirtualCardGroup(cardsInGroup))
+}
+
+function convertVirtualCardGroup (cards: OtpCard[]): ConvertResult {
+  const uniqueCards = dedupeCardsByPrimaryId(cards)
+  const first = uniqueCards[0]
+  const accountNumber = first.accountNumber
+  const currencyCode = first.currencyCode
+  const accountId = `virtual_${accountNumber}_${currencyCode}`
+
+  const products: Product[] = uniqueCards.map(card => ({
+    id: `virtual_${accountNumber}_${currencyCode}_${card.primaryCardId}`,
+    source: 'cardTurnover',
+    accountNumber,
+    primaryCardId: card.primaryCardId,
+    productCodeCore: card.productCodeCore,
+    currencyCodeNumeric: card.currencyCodeNumeric,
+    accountType: card.currencyCodeNumeric === '941' ? 'DIN' : 'DEV'
+  }))
+
+  const syncIds: string[] = [accountId, accountNumber]
+  for (const card of uniqueCards) {
+    syncIds.push(card.primaryCardId, card.maskedPan)
+  }
+
+  return {
+    products,
+    account: {
+      id: accountId,
+      type: AccountType.ccard,
+      title: virtualCardGroupTitle(uniqueCards, currencyCode),
+      instrument: currencyCode,
+      balance: first.balance,
+      creditLimit: 0,
+      syncIds
+    }
+  }
 }
 
 function parseMerchant (title: string, merchantTitle: unknown = null): Merchant | NonParsedMerchant | null {
